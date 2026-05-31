@@ -1,33 +1,125 @@
-import asyncio, httpx, time
+import asyncio
+import time
+import json
+import httpx
+from typing import List, Dict
 
-async def one(client, prompt):
-    t = time.perf_counter()
-    r = await client.post("http://localhost:8000/ollama/chat",
-                          json={"message": prompt}, timeout=60)
-    return time.perf_counter() - t, r.status_code
+BASE_URL = "http://127.0.0.1:8000"
+MODELS = ["llama3.2:1b", "qwen2.5:7b"]
+CONCURRENCY_LEVELS = [1, 2, 4, 8]
+REQUESTS_PER_LEVEL = 10
+PROMPT = "Say hello in one word"
 
-async def run(concurrency, n):
-    async with httpx.AsyncClient() as c:
-        sem = asyncio.Semaphore(concurrency)
-        async def worker():
-            async with sem:
-                return await one(c, "Explain attention in 2 sentences.")
-        results = await asyncio.gather(*[worker() for _ in range(n)])
+
+async def send_request(client: httpx.AsyncClient, model: str) -> float:
+    """Send one request, return latency in seconds."""
+    start = time.time()
+    try:
+        response = await client.post(
+            f"{BASE_URL}/ollama/chat",
+            json={"message": PROMPT, "model": model},
+            timeout=120.0,
+        )
+        response.raise_for_status()
+        elapsed = time.time() - start
+        return elapsed
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
+
+
+async def benchmark_model_at_concurrency(
+    model: str, concurrency: int, num_requests: int
+) -> List[float]:
+    """Run concurrent requests and return list of latencies."""
+    async with httpx.AsyncClient() as client:
+        tasks = [
+            send_request(client, model)
+            for _ in range(num_requests)
+        ]
+        # Limit concurrency by chunking
+        results = []
+        for i in range(0, len(tasks), concurrency):
+            chunk = tasks[i : i + concurrency]
+            latencies = await asyncio.gather(*chunk)
+            results.extend([l for l in latencies if l is not None])
+        return results
+
+
+async def run_benchmark():
+    """Run full benchmark sweep."""
+    results = {}
+    
+    for model in MODELS:
+        print(f"\n{'='*60}")
+        print(f"Testing model: {model}")
+        print(f"{'='*60}")
+        
+        results[model] = {}
+        
+        for concurrency in CONCURRENCY_LEVELS:
+            print(f"  Concurrency: {concurrency} | Requests: {REQUESTS_PER_LEVEL}", end="")
+            latencies = await benchmark_model_at_concurrency(
+                model, concurrency, REQUESTS_PER_LEVEL
+            )
+            
+            avg = sum(latencies) / len(latencies)
+            p95 = sorted(latencies)[int(len(latencies) * 0.95)]
+            max_lat = max(latencies)
+            
+            results[model][concurrency] = {
+                "latencies": latencies,
+                "avg": avg,
+                "p95": p95,
+                "max": max_lat,
+            }
+            
+            print(f" | avg: {avg:.2f}s | p95: {p95:.2f}s | max: {max_lat:.2f}s")
+    
     return results
 
+
+def plot_results(results: Dict):
+    """Plot latency vs concurrency for each model."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib not installed. Run: pip install matplotlib")
+        return
+    
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    # Plot 1: Average latency
+    ax = axes[0]
+    for model in results:
+        concurrencies = sorted(results[model].keys())
+        avgs = [results[model][c]["avg"] for c in concurrencies]
+        ax.plot(concurrencies, avgs, marker="o", label=model, linewidth=2)
+    
+    ax.set_xlabel("Concurrency (requests in parallel)")
+    ax.set_ylabel("Latency (seconds)")
+    ax.set_title("Average Latency vs Concurrency")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 2: P95 latency (tail latency)
+    ax = axes[1]
+    for model in results:
+        concurrencies = sorted(results[model].keys())
+        p95s = [results[model][c]["p95"] for c in concurrencies]
+        ax.plot(concurrencies, p95s, marker="s", label=model, linewidth=2)
+    
+    ax.set_xlabel("Concurrency (requests in parallel)")
+    ax.set_ylabel("P95 Latency (seconds)")
+    ax.set_title("Tail Latency (P95) vs Concurrency")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig("benchmark_results.png", dpi=150)
+    print("\n✓ Plot saved to benchmark_results.png")
+
+
 if __name__ == "__main__":
-    import sys, statistics
-    concurrency = int(sys.argv[1]) if len(sys.argv) > 1 else 8
-    n = int(sys.argv[2]) if len(sys.argv) > 2 else 50
-
-    results = asyncio.run(run(concurrency, n))
-    latencies = [r[0] for r in results]
-    latencies.sort()
-    p = lambda q: latencies[int(len(latencies) * q) - 1]
-
-    print(f"n={n} concurrency={concurrency}")
-    print(f"p50={p(0.50):.2f}s  p95={p(0.95):.2f}s  p99={p(0.99):.2f}s")
-    print(f"mean={statistics.mean(latencies):.2f}s")
-
-    statuses = [r[1] for r in results]
-    print(f"statuses: {dict((s, statuses.count(s)) for s in set(statuses))}")
+    results = asyncio.run(run_benchmark())
+    plot_results(results)
