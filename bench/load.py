@@ -1,17 +1,23 @@
 import asyncio
+import csv
 import time
-import json
+import math
+from pathlib import Path
+
 import httpx
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 BASE_URL = "http://127.0.0.1:8000"
 MODELS = ["llama3.2:1b", "qwen2.5:7b"]
 CONCURRENCY_LEVELS = [1, 2, 4, 8]
 REQUESTS_PER_LEVEL = 10
 PROMPT = "Say hello in one word"
+RESULTS_DIR = Path("results")
+CSV_PATH = RESULTS_DIR / "results.csv"
+PNG_PATH = RESULTS_DIR / "benchmark_results.png"
 
 
-async def send_request(client: httpx.AsyncClient, model: str) -> float:
+async def send_request(client: httpx.AsyncClient, model: str) -> Optional[float]:
     """Send one request, return latency in seconds."""
     start = time.time()
     try:
@@ -63,8 +69,15 @@ async def run_benchmark():
                 model, concurrency, REQUESTS_PER_LEVEL
             )
             
+            if not latencies:
+                print(" | FAILED (no successful requests)")
+                continue
+            
             avg = sum(latencies) / len(latencies)
-            p95 = sorted(latencies)[int(len(latencies) * 0.95)]
+            # Safe p95 calculation: pick the ceil 95th percentile index
+            sorted_lat = sorted(latencies)
+            idx = max(0, min(len(sorted_lat) - 1, math.ceil(0.95 * len(sorted_lat)) - 1))
+            p95 = sorted_lat[idx]
             max_lat = max(latencies)
             
             results[model][concurrency] = {
@@ -79,47 +92,81 @@ async def run_benchmark():
     return results
 
 
-def plot_results(results: Dict):
+def ensure_results_dir(path: Path) -> None:
+    """Create the parent results directory if it does not exist."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def plot_results(results: Dict, output_path: Path = PNG_PATH):
     """Plot latency vs concurrency for each model."""
+    if not results:
+        print("No results to plot.")
+        return
+
     try:
         import matplotlib.pyplot as plt
     except ImportError:
         print("matplotlib not installed. Run: pip install matplotlib")
         return
-    
+
+    ensure_results_dir(output_path)
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    
+
     # Plot 1: Average latency
     ax = axes[0]
     for model in results:
         concurrencies = sorted(results[model].keys())
         avgs = [results[model][c]["avg"] for c in concurrencies]
         ax.plot(concurrencies, avgs, marker="o", label=model, linewidth=2)
-    
+
     ax.set_xlabel("Concurrency (requests in parallel)")
     ax.set_ylabel("Latency (seconds)")
     ax.set_title("Average Latency vs Concurrency")
     ax.legend()
     ax.grid(True, alpha=0.3)
-    
+
     # Plot 2: P95 latency (tail latency)
     ax = axes[1]
     for model in results:
         concurrencies = sorted(results[model].keys())
         p95s = [results[model][c]["p95"] for c in concurrencies]
         ax.plot(concurrencies, p95s, marker="s", label=model, linewidth=2)
-    
+
     ax.set_xlabel("Concurrency (requests in parallel)")
     ax.set_ylabel("P95 Latency (seconds)")
     ax.set_title("Tail Latency (P95) vs Concurrency")
     ax.legend()
     ax.grid(True, alpha=0.3)
-    
+
     plt.tight_layout()
-    plt.savefig("benchmark_results.png", dpi=150)
-    print("\n✓ Plot saved to benchmark_results.png")
+    plt.savefig(output_path, dpi=150)
+    print(f"\n✓ Plot saved to {output_path}")
+
+
+def save_csv(results: Dict, path: Path = CSV_PATH):
+    """Save results to CSV."""
+    if not results:
+        print("No results to save.")
+        return
+
+    ensure_results_dir(path)
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["concurrency", "model", "avg", "p95", "max"])
+        for model in results:
+            for concurrency in sorted(results[model].keys()):
+                r = results[model][concurrency]
+                writer.writerow([
+                    concurrency,
+                    model,
+                    round(r["avg"], 3),
+                    round(r["p95"], 3),
+                    round(r["max"], 3),
+                ])
+    print(f"\n✓ Results saved to {path}")
 
 
 if __name__ == "__main__":
     results = asyncio.run(run_benchmark())
+    save_csv(results)
     plot_results(results)
