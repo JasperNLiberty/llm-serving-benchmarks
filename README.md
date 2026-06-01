@@ -1,6 +1,6 @@
 # LLM Serving Benchmarks
 
-Ollama model comparison under concurrent load.
+Ollama model, prompt, and device comparison under concurrent load.
 
 ## Setup
 
@@ -23,16 +23,22 @@ Then run the benchmark:
 python bench/load.py
 ```
 
+This script sweeps:
+- models
+- prompts
+- CPU vs GPU device targets
+- concurrency levels
+- latency and token throughput metrics
+
 Outputs:
-- `results/results.csv` — raw data
-- `results/benchmark_results.png` — latency charts
+- `results/results.csv` — combined benchmark data
+- `results/by_prompt/` — prompt-specific CSV summaries
+- `results/by_device/` — device-specific CSV summaries
 
 ## Key Finding
 
 Smaller models (1b) maintain lower latency under concurrency.
 Larger models (7b) saturate faster due to memory/compute limits.
-
-![Benchmark Results](results/benchmark_results.png)
 
 - [Analysis notebook](notebooks/analysis.ipynb)
 - [Raw results](results/results.csv)
