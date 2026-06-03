@@ -8,21 +8,20 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import httpx
 
-BASE_URL = "http://127.0.0.1:8000"
-MODELS = ["llama3.2:1b", "qwen2.5:7b"]
+BASE_URL = "http://127.0.0.1:8001"
+MODELS = ["qwen2.5:7b"]
 PROMPTS = [
     "Say hello in one word",
-    "Summarize the plot of The Matrix in a single sentence",
-    "Translate 'Hello' to Spanish",
-    "Write a short Python function that computes factorial",
+    # "Summarize the plot of The Matrix in a single sentence",
+    # "Translate 'Hello' to Spanish",
+    # "Write a short Python function that computes factorial",
 ]
-DEVICES = ["cpu", "gpu"]
-CONCURRENCY_LEVELS = [1, 2, 4, 8]
-REQUESTS_PER_LEVEL = 48
-RESULTS_DIR = Path("results")
-CSV_PATH = RESULTS_DIR / "results.csv"
+CONCURRENCY_LEVELS = [8, 16, 32]
+REQUESTS_PER_LEVEL = 32
+RESULTS_DIR = Path("results/mlx")
+CSV_PATH = RESULTS_DIR / "results_mlx.csv"
 PROMPT_DIR = RESULTS_DIR / "by_prompt"
-DEVICE_DIR = RESULTS_DIR / "by_device"
+BATCH_DIR = RESULTS_DIR / "by_batch_size"
 
 
 def slugify(value: str) -> str:
@@ -79,23 +78,19 @@ def extract_token_count(response: httpx.Response) -> int:
     return estimate_tokens(response.text)
 
 
-def build_payload(prompt: str, model: str, device: Optional[str]) -> Dict[str, Any]:
-    payload = {"message": prompt, "model": model}
-    if device:
-        payload["device"] = device
-        payload["options"] = {"device": device}
-    return payload
+def build_payload(prompt: str, model: str) -> Dict[str, Any]:
+    return {"prompt": prompt, "model": model}
 
 
 async def send_request(
-    client: httpx.AsyncClient, model: str, prompt: str, device: Optional[str]
+    client: httpx.AsyncClient, model: str, prompt: str
 ) -> Dict[str, Any]:
     start = time.time()
-    payload = build_payload(prompt, model, device)
+    payload = build_payload(prompt, model)
 
     try:
         response = await client.post(
-            f"{BASE_URL}/ollama/chat",
+            f"{BASE_URL}/mlx/chat",
             json=payload,
             timeout=120.0,
         )
@@ -121,7 +116,6 @@ async def send_request(
 async def benchmark_model_at_concurrency(
     model: str,
     prompt: str,
-    device: Optional[str],
     concurrency: int,
     num_requests: int,
 ) -> List[Dict[str, Any]]:
@@ -129,38 +123,12 @@ async def benchmark_model_at_concurrency(
         results: List[Dict[str, Any]] = []
         for i in range(0, num_requests, concurrency):
             chunk = [
-                send_request(client, model, prompt, device)
+                send_request(client, model, prompt)
                 for _ in range(min(concurrency, num_requests - i))
             ]
             completed = await asyncio.gather(*chunk)
             results.extend(completed)
         return results
-
-
-async def prewarm_models(
-    models: Iterable[str],
-    devices: Iterable[str],
-    prompt: str = "count to 10",
-) -> None:
-    print("\n" + "=" * 72)
-    print("Prewarming models...")
-    async with httpx.AsyncClient() as client:
-        for model in models:
-            for device in devices:
-                description = f"{model} on device {device}" if device else model
-                print(f"  Prewarming {description}")
-                payload = build_payload(prompt, model, device)
-                try:
-                    response = await client.post(
-                        f"{BASE_URL}/ollama/chat",
-                        json=payload,
-                        timeout=120.0,
-                    )
-                    response.raise_for_status()
-                except Exception as exc:
-                    print(f"    Warning: prewarm failed for {description}: {exc}")
-    print("Prewarm complete.")
-    print("=" * 72)
 
 
 def percentile(values: List[float], fraction: float) -> float:
@@ -171,68 +139,86 @@ def percentile(values: List[float], fraction: float) -> float:
     return sorted_values[idx]
 
 
+async def prewarm_model(model: str, prompt: str = "count to 10") -> None:
+    print("\n" + "=" * 72)
+    print("Prewarming MLX model...")
+    async with httpx.AsyncClient() as client:
+        print(f"  Prewarming {model}")
+        payload = build_payload(prompt, model)
+        try:
+            response = await client.post(
+                f"{BASE_URL}/mlx/chat",
+                json=payload,
+                timeout=120.0,
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            print(f"    Warning: prewarm failed: {exc}")
+    print("Prewarm complete.")
+    print("=" * 72)
+
+
 async def run_benchmark(
     prompts: Iterable[str],
-    models: Iterable[str],
-    devices: Iterable[str],
+    model: str,
     concurrency_levels: Iterable[int],
     requests_per_level: int,
+    batch_size: int = 32,
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
 
-    await prewarm_models(models, devices)
+    # prewarm the selected MLX model to load it into memory
+    await prewarm_model(model)
 
     for prompt in prompts:
-        for model in models:
-            for device in devices:
-                for concurrency in concurrency_levels:
-                    print("\n" + "=" * 72)
-                    print(f"Prompt: {prompt}")
-                    print(f"Model: {model} | Device: {device} | Concurrency: {concurrency} | Requests: {requests_per_level}")
-                    print("" + "=" * 72)
+        for concurrency in concurrency_levels:
+            print("\n" + "=" * 72)
+            print(f"Prompt: {prompt}")
+            print(f"Model: {model} | Concurrency: {concurrency} | Batch Size: {batch_size} | Requests: {requests_per_level}")
+            print("=" * 72)
 
-                    request_results = await benchmark_model_at_concurrency(
-                        model,
-                        prompt,
-                        device,
-                        concurrency,
-                        requests_per_level,
-                    )
+            request_results = await benchmark_model_at_concurrency(
+                model,
+                prompt,
+                concurrency,
+                requests_per_level,
+            )
 
-                    successful = [r for r in request_results if r["success"]]
-                    failed = [r for r in request_results if not r["success"]]
-                    latencies = [r["latency"] for r in successful if r["latency"] is not None]
-                    tokens = sum(r["tokens"] for r in successful)
-                    duration = sum(latencies) if latencies else 0.0
+            successful = [r for r in request_results if r["success"]]
+            failed = [r for r in request_results if not r["success"]]
+            latencies = [r["latency"] for r in successful if r["latency"] is not None]
+            tokens = sum(r["tokens"] for r in successful)
+            duration = sum(latencies) if latencies else 0.0
 
-                    row = {
-                        "prompt": prompt,
-                        "model": model,
-                        "device": device,
-                        "concurrency": concurrency,
-                        "requested": requests_per_level,
-                        "success_count": len(successful),
-                        "failure_count": len(failed),
-                        "avg_latency": sum(latencies) / len(latencies) if latencies else None,
-                        "min_latency": min(latencies) if latencies else None,
-                        "p50_latency": percentile(latencies, 0.50) if latencies else None,
-                        "p95_latency": percentile(latencies, 0.95) if latencies else None,
-                        "p99_latency": percentile(latencies, 0.99) if latencies else None,
-                        "max_latency": max(latencies) if latencies else None,
-                        "total_tokens": tokens,
-                        "avg_tokens": tokens / len(successful) if successful else None,
-                        "tokens_per_sec": tokens / duration if duration else None,
-                        "requests_per_sec": len(successful) / duration if duration else None,
-                        "duration": duration,
-                    }
+            row = {
+                "prompt": prompt,
+                "model": model,
+                "batch_size": batch_size,
+                "concurrency": concurrency,
+                "requested": requests_per_level,
+                "success_count": len(successful),
+                "failure_count": len(failed),
+                "avg_latency": sum(latencies) / len(latencies) if latencies else None,
+                "min_latency": min(latencies) if latencies else None,
+                "p50_latency": percentile(latencies, 0.50) if latencies else None,
+                "p95_latency": percentile(latencies, 0.95) if latencies else None,
+                "p99_latency": percentile(latencies, 0.99) if latencies else None,
+                "max_latency": max(latencies) if latencies else None,
+                "total_tokens": tokens,
+                "avg_tokens": tokens / len(successful) if successful else None,
+                "tokens_per_sec": tokens / duration if duration else None,
+                "requests_per_sec": len(successful) / duration if duration else None,
+                "duration": duration,
+            }
 
-                    if failed:
-                        print(f"  {len(failed)} failed requests")
-                    print(
-                        f"  success: {row['success_count']} | avg: {format_number(row['avg_latency'])}s | "
-                        f"p95: {format_number(row['p95_latency'])}s | tokens/sec: {format_number(row['tokens_per_sec'])}"
-                    )
-                    rows.append(row)
+            if failed:
+                print(f"  {len(failed)} failed requests")
+            print(
+                f"  success: {row['success_count']} | avg: {format_number(row['avg_latency'])}s | "
+                f"p95: {format_number(row['p95_latency'])}s | tokens/sec: {format_number(row['tokens_per_sec'])} | "
+                f"req/sec: {format_number(row['requests_per_sec'])}"
+            )
+            rows.append(row)
 
     return rows
 
@@ -242,7 +228,7 @@ def save_csv(rows: List[Dict[str, Any]], path: Path) -> None:
     fieldnames = [
         "prompt",
         "model",
-        "device",
+        "batch_size",
         "concurrency",
         "requested",
         "success_count",
@@ -266,7 +252,7 @@ def save_csv(rows: List[Dict[str, Any]], path: Path) -> None:
         for row in rows:
             writer.writerow({k: row.get(k, "") for k in fieldnames})
 
-    print(f"\n✓ Results saved to {path}")
+    print(f"\n✓ MLX results saved to {path}")
 
 
 def save_grouped_csv(rows: List[Dict[str, Any]], group_key: str, output_dir: Path) -> None:
@@ -282,12 +268,12 @@ def save_grouped_csv(rows: List[Dict[str, Any]], group_key: str, output_dir: Pat
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="LLM serving benchmark sweep")
-    parser.add_argument("--models", nargs="+", default=MODELS, help="Models to benchmark")
+    parser = argparse.ArgumentParser(description="MLX serving benchmark sweep")
+    parser.add_argument("--model", default=MODELS[0], help="Model to benchmark")
     parser.add_argument("--prompts", nargs="+", default=PROMPTS, help="Prompts to benchmark")
-    parser.add_argument("--devices", nargs="+", default=DEVICES, help="Inference devices to test")
     parser.add_argument("--concurrency", nargs="+", type=int, default=CONCURRENCY_LEVELS, help="Concurrency levels to test")
     parser.add_argument("--requests", type=int, default=REQUESTS_PER_LEVEL, help="Requests per concurrency level")
+    parser.add_argument("--batch-size", type=int, default=32, help="Batch size for MLX")
     return parser.parse_args()
 
 
@@ -296,16 +282,16 @@ def main() -> None:
     rows = asyncio.run(
         run_benchmark(
             prompts=args.prompts,
-            models=args.models,
-            devices=args.devices,
+            model=args.model,
             concurrency_levels=args.concurrency,
             requests_per_level=args.requests,
+            batch_size=args.batch_size,
         )
     )
 
     save_csv(rows, CSV_PATH)
     save_grouped_csv(rows, "prompt", PROMPT_DIR)
-    save_grouped_csv(rows, "device", DEVICE_DIR)
+    save_grouped_csv(rows, "batch_size", BATCH_DIR)
 
 
 if __name__ == "__main__":
