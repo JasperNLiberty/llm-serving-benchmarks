@@ -2,11 +2,15 @@ import argparse
 import asyncio
 import csv
 import math
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 import httpx
+
+sys.path.insert(0, str(Path(__file__).parent))
+from cost_calculator import cost_per_million_tokens, get_gpu_hourly_rate
 
 BASE_URL = "http://127.0.0.1:8000"
 MODELS = ["llama3.2:1b", "qwen2.5:7b"]
@@ -205,6 +209,8 @@ async def run_benchmark(
                     tokens = sum(r["tokens"] for r in successful)
                     duration = sum(latencies) if latencies else 0.0
 
+                    tps = tokens / duration if duration else None
+                    rate = get_gpu_hourly_rate()
                     row = {
                         "prompt": prompt,
                         "model": model,
@@ -221,9 +227,10 @@ async def run_benchmark(
                         "max_latency": max(latencies) if latencies else None,
                         "total_tokens": tokens,
                         "avg_tokens": tokens / len(successful) if successful else None,
-                        "tokens_per_sec": tokens / duration if duration else None,
+                        "tokens_per_sec": tps,
                         "requests_per_sec": len(successful) / duration if duration else None,
                         "duration": duration,
+                        "cost_per_million_tokens": cost_per_million_tokens(rate, tps) if tps else None,
                     }
 
                     if failed:
@@ -258,6 +265,7 @@ def save_csv(rows: List[Dict[str, Any]], path: Path) -> None:
         "tokens_per_sec",
         "requests_per_sec",
         "duration",
+        "cost_per_million_tokens",
     ]
 
     with open(path, "w", newline="") as f:

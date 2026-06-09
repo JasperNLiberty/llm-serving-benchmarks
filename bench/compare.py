@@ -2,12 +2,16 @@ import argparse
 import asyncio
 import csv
 import math
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+sys.path.insert(0, str(Path(__file__).parent))
+from cost_calculator import cost_per_million_tokens, get_gpu_hourly_rate
 
 OLLAMA_URL = "http://127.0.0.1:8000"
 MLX_URL = "http://127.0.0.1:8001"
@@ -184,6 +188,10 @@ async def run_comparison(
             mlx_duration = sum(mlx_latencies) if mlx_latencies else 0.0
 
             # Create rows
+            rate = get_gpu_hourly_rate()
+            ollama_tps = ollama_tokens / ollama_duration if ollama_duration else None
+            mlx_tps = mlx_tokens / mlx_duration if mlx_duration else None
+
             ollama_row = {
                 "prompt": prompt,
                 "backend": "ollama",
@@ -200,9 +208,10 @@ async def run_comparison(
                 "max_latency": max(ollama_latencies) if ollama_latencies else None,
                 "total_tokens": ollama_tokens,
                 "avg_tokens": ollama_tokens / len(ollama_successful) if ollama_successful else None,
-                "tokens_per_sec": ollama_tokens / ollama_duration if ollama_duration else None,
+                "tokens_per_sec": ollama_tps,
                 "requests_per_sec": len(ollama_successful) / ollama_duration if ollama_duration else None,
                 "duration": ollama_duration,
+                "cost_per_million_tokens": cost_per_million_tokens(rate, ollama_tps) if ollama_tps else None,
             }
 
             mlx_row = {
@@ -221,9 +230,10 @@ async def run_comparison(
                 "max_latency": max(mlx_latencies) if mlx_latencies else None,
                 "total_tokens": mlx_tokens,
                 "avg_tokens": mlx_tokens / len(mlx_successful) if mlx_successful else None,
-                "tokens_per_sec": mlx_tokens / mlx_duration if mlx_duration else None,
+                "tokens_per_sec": mlx_tps,
                 "requests_per_sec": len(mlx_successful) / mlx_duration if mlx_duration else None,
                 "duration": mlx_duration,
+                "cost_per_million_tokens": cost_per_million_tokens(rate, mlx_tps) if mlx_tps else None,
             }
 
             rows.extend([ollama_row, mlx_row])
@@ -260,6 +270,7 @@ def save_csv(rows: List[Dict[str, Any]], path: Path) -> None:
         "tokens_per_sec",
         "requests_per_sec",
         "duration",
+        "cost_per_million_tokens",
     ]
 
     with open(path, "w", newline="") as f:
