@@ -1,0 +1,62 @@
+{
+  "generated_at": "2026-06-10T05:24:54.093201+00:00",
+  "host": "Lis-MacBook-Pro.local",
+  "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "processor": "arm",
+  "python": "3.14.5",
+  "ollama_version": "0.24.0",
+  "gpu_hourly_rate_usd": 0.8,
+  "quick_mode": false,
+  "services_up": {
+    "ollama_gateway": true,
+    "mlx_gateway": true,
+    "ollama_daemon": true
+  },
+  "ollama_models": [
+    {
+      "name": "nomic-embed-text:latest",
+      "digest": "0a109f422b47",
+      "size": 274302450
+    },
+    {
+      "name": "qwen2.5-coder:32b",
+      "digest": "b92d6a0bd47e",
+      "size": 19851349898
+    },
+    {
+      "name": "qwen2.5-7b-64k:latest",
+      "digest": "3fa6ebd8234a",
+      "size": 4683087424
+    },
+    {
+      "name": "qwen2.5:7b",
+      "digest": "845dbda0ea48",
+      "size": 4683087332
+    },
+    {
+      "name": "qwen2.5-fast:latest",
+      "digest": "f6aa5fc6c2b0",
+      "size": 8988124160
+    },
+    {
+      "name": "qwen2.5-64k:latest",
+      "digest": "c756237182d7",
+      "size": 8988124161
+    },
+    {
+      "name": "qwen2.5:14b",
+      "digest": "7cdf5a0187d5",
+      "size": 8988124069
+    },
+    {
+      "name": "hermes3:8b",
+      "digest": "4f6b83f30b62",
+      "size": 4661227243
+    },
+    {
+      "name": "llama3.2:1b",
+      "digest": "baf6a787fdff",
+      "size": 1321098329
+    }
+  ]
+}

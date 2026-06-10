@@ -1,3 +1,26 @@
+"""Model x prompt x device x concurrency sweep, measured against Ollama directly.
+
+This benchmark talks to Ollama's native API (:11434) rather than the gateway,
+because its purpose is a *hardware* comparison -- CPU vs GPU (Metal) -- and that
+is controlled by Ollama's ``num_gpu`` option, which the gateway abstracts away:
+
+    CPU : options={"num_gpu": 0}     -> force all layers onto CPU
+    GPU : options={}                 -> Metal default (all layers on GPU)
+
+Token counts come from Ollama's authoritative ``eval_count`` (output tokens) and
+``prompt_eval_count`` (input tokens), not a word-count estimate. Every result row
+carries ``cost_per_million_tokens`` via the shared cost_calculator.
+
+Defaults are deliberately modest: CPU inference of a 7B model is slow, and the
+charts (generate_charts.py) only consume the concurrency=1 rows, so a deep
+concurrency sweep here would be wasted wall-clock. Override with flags as needed.
+
+Usage:
+    python bench/load.py
+    python bench/load.py --models qwen2.5:7b --devices cpu gpu --requests 24
+    python bench/load.py --concurrency 1 4 8 --max-tokens 256
+"""
+
 import argparse
 import asyncio
 import csv
@@ -12,7 +35,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).parent))
 from cost_calculator import cost_per_million_tokens, get_gpu_hourly_rate
 
-BASE_URL = "http://127.0.0.1:8000"
+OLLAMA_URL = "http://127.0.0.1:11434"
 MODELS = ["llama3.2:1b", "qwen2.5:7b"]
 PROMPTS = [
     "Say hello in one word",
@@ -21,8 +44,9 @@ PROMPTS = [
     "Write a short Python function that computes factorial",
 ]
 DEVICES = ["cpu", "gpu"]
-CONCURRENCY_LEVELS = [1, 2, 4, 8]
-REQUESTS_PER_LEVEL = 48
+CONCURRENCY_LEVELS = [1, 4]
+REQUESTS_PER_LEVEL = 16
+MAX_NEW_TOKENS = 128          # cap output so CPU 7B runs stay bounded
 RESULTS_DIR = Path("results")
 CSV_PATH = RESULTS_DIR / "results.csv"
 PROMPT_DIR = RESULTS_DIR / "by_prompt"
@@ -43,128 +67,70 @@ def format_number(value: Optional[float]) -> str:
     return "" if value is None else f"{value:.4f}"
 
 
-def estimate_tokens(text: str) -> int:
-    return max(1, len(text.split()))
-
-
-def extract_token_count(response: httpx.Response) -> int:
-    try:
-        data = response.json()
-    except ValueError:
-        return estimate_tokens(response.text)
-
-    if isinstance(data, dict):
-        usage = data.get("usage")
-        if isinstance(usage, dict):
-            for key in ("total_tokens", "tokens", "prompt_tokens", "completion_tokens"):
-                if isinstance(usage.get(key), (int, float)):
-                    return int(usage[key])
-
-        token_usage = data.get("token_usage")
-        if isinstance(token_usage, dict):
-            if isinstance(token_usage.get("total"), (int, float)):
-                return int(token_usage["total"])
-
-        if "choices" in data and isinstance(data["choices"], list):
-            texts = []
-            for choice in data["choices"]:
-                if isinstance(choice, dict):
-                    message = choice.get("message")
-                    if isinstance(message, dict) and isinstance(message.get("content"), str):
-                        texts.append(message["content"])
-                    elif isinstance(choice.get("text"), str):
-                        texts.append(choice["text"])
-            if texts:
-                return estimate_tokens(" ".join(texts))
-
-        if isinstance(data.get("text"), str):
-            return estimate_tokens(data["text"])
-
-    return estimate_tokens(response.text)
-
-
-def build_payload(prompt: str, model: str, device: Optional[str]) -> Dict[str, Any]:
-    payload = {"message": prompt, "model": model}
-    if device:
-        payload["device"] = device
-        payload["options"] = {"device": device}
-    return payload
+def build_options(device: str, max_tokens: int) -> Dict[str, Any]:
+    options: Dict[str, Any] = {"num_predict": max_tokens}
+    if device == "cpu":
+        options["num_gpu"] = 0      # 0 GPU layers => pure CPU inference
+    return options
 
 
 async def send_request(
-    client: httpx.AsyncClient, model: str, prompt: str, device: Optional[str]
+    client: httpx.AsyncClient, model: str, prompt: str, device: str, max_tokens: int
 ) -> Dict[str, Any]:
     start = time.time()
-    payload = build_payload(prompt, model, device)
-
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": build_options(device, max_tokens),
+    }
     try:
-        response = await client.post(
-            f"{BASE_URL}/ollama/chat",
-            json=payload,
-            timeout=120.0,
-        )
+        response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=300.0)
         response.raise_for_status()
-
         elapsed = time.time() - start
-        tokens = extract_token_count(response)
+        data = response.json()
         return {
             "latency": elapsed,
-            "tokens": tokens,
+            "tokens": int(data.get("eval_count", 0)),          # output tokens
+            "input_tokens": int(data.get("prompt_eval_count", 0)),
             "success": True,
             "error": None,
         }
     except Exception as exc:
-        return {
-            "latency": None,
-            "tokens": 0,
-            "success": False,
-            "error": str(exc),
-        }
+        return {"latency": None, "tokens": 0, "input_tokens": 0, "success": False, "error": str(exc)}
 
 
 async def benchmark_model_at_concurrency(
-    model: str,
-    prompt: str,
-    device: Optional[str],
-    concurrency: int,
-    num_requests: int,
+    model: str, prompt: str, device: str, concurrency: int, num_requests: int, max_tokens: int,
 ) -> List[Dict[str, Any]]:
     async with httpx.AsyncClient() as client:
         results: List[Dict[str, Any]] = []
         for i in range(0, num_requests, concurrency):
             chunk = [
-                send_request(client, model, prompt, device)
+                send_request(client, model, prompt, device, max_tokens)
                 for _ in range(min(concurrency, num_requests - i))
             ]
-            completed = await asyncio.gather(*chunk)
-            results.extend(completed)
+            results.extend(await asyncio.gather(*chunk))
         return results
 
 
-async def prewarm_models(
-    models: Iterable[str],
-    devices: Iterable[str],
-    prompt: str = "count to 10",
-) -> None:
-    print("\n" + "=" * 72)
-    print("Prewarming models...")
+async def prewarm_models(models: Iterable[str], devices: Iterable[str], max_tokens: int) -> None:
+    print("\n" + "=" * 72 + "\nPrewarming models...")
     async with httpx.AsyncClient() as client:
         for model in models:
             for device in devices:
-                description = f"{model} on device {device}" if device else model
-                print(f"  Prewarming {description}")
-                payload = build_payload(prompt, model, device)
+                print(f"  Prewarming {model} on device {device}")
                 try:
-                    response = await client.post(
-                        f"{BASE_URL}/ollama/chat",
-                        json=payload,
-                        timeout=120.0,
+                    r = await client.post(
+                        f"{OLLAMA_URL}/api/generate",
+                        json={"model": model, "prompt": "count to 5", "stream": False,
+                              "options": build_options(device, 16)},
+                        timeout=300.0,
                     )
-                    response.raise_for_status()
+                    r.raise_for_status()
                 except Exception as exc:
-                    print(f"    Warning: prewarm failed for {description}: {exc}")
-    print("Prewarm complete.")
-    print("=" * 72)
+                    print(f"    Warning: prewarm failed for {model}/{device}: {exc}")
+    print("Prewarm complete.\n" + "=" * 72)
 
 
 def percentile(values: List[float], fraction: float) -> float:
@@ -176,15 +142,11 @@ def percentile(values: List[float], fraction: float) -> float:
 
 
 async def run_benchmark(
-    prompts: Iterable[str],
-    models: Iterable[str],
-    devices: Iterable[str],
-    concurrency_levels: Iterable[int],
-    requests_per_level: int,
+    prompts: Iterable[str], models: Iterable[str], devices: Iterable[str],
+    concurrency_levels: Iterable[int], requests_per_level: int, max_tokens: int,
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
-
-    await prewarm_models(models, devices)
+    await prewarm_models(models, devices, max_tokens)
 
     for prompt in prompts:
         for model in models:
@@ -193,14 +155,10 @@ async def run_benchmark(
                     print("\n" + "=" * 72)
                     print(f"Prompt: {prompt}")
                     print(f"Model: {model} | Device: {device} | Concurrency: {concurrency} | Requests: {requests_per_level}")
-                    print("" + "=" * 72)
+                    print("=" * 72)
 
                     request_results = await benchmark_model_at_concurrency(
-                        model,
-                        prompt,
-                        device,
-                        concurrency,
-                        requests_per_level,
+                        model, prompt, device, concurrency, requests_per_level, max_tokens,
                     )
 
                     successful = [r for r in request_results if r["success"]]
@@ -234,83 +192,66 @@ async def run_benchmark(
                     }
 
                     if failed:
-                        print(f"  {len(failed)} failed requests")
+                        print(f"  {len(failed)} failed requests (e.g. {failed[0]['error']})")
                     print(
                         f"  success: {row['success_count']} | avg: {format_number(row['avg_latency'])}s | "
-                        f"p95: {format_number(row['p95_latency'])}s | tokens/sec: {format_number(row['tokens_per_sec'])}"
+                        f"p95: {format_number(row['p95_latency'])}s | tok/s: {format_number(row['tokens_per_sec'])} | "
+                        f"${format_number(row['cost_per_million_tokens'])}/M"
                     )
                     rows.append(row)
-
     return rows
+
+
+FIELDNAMES = [
+    "prompt", "model", "device", "concurrency", "requested",
+    "success_count", "failure_count", "avg_latency", "min_latency",
+    "p50_latency", "p95_latency", "p99_latency", "max_latency",
+    "total_tokens", "avg_tokens", "tokens_per_sec", "requests_per_sec",
+    "duration", "cost_per_million_tokens",
+]
 
 
 def save_csv(rows: List[Dict[str, Any]], path: Path) -> None:
     ensure_dir(path.parent)
-    fieldnames = [
-        "prompt",
-        "model",
-        "device",
-        "concurrency",
-        "requested",
-        "success_count",
-        "failure_count",
-        "avg_latency",
-        "min_latency",
-        "p50_latency",
-        "p95_latency",
-        "p99_latency",
-        "max_latency",
-        "total_tokens",
-        "avg_tokens",
-        "tokens_per_sec",
-        "requests_per_sec",
-        "duration",
-        "cost_per_million_tokens",
-    ]
-
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
         for row in rows:
-            writer.writerow({k: row.get(k, "") for k in fieldnames})
-
-    print(f"\n✓ Results saved to {path}")
+            writer.writerow({k: row.get(k, "") for k in FIELDNAMES})
+    print(f"\nResults saved to {path}")
 
 
 def save_grouped_csv(rows: List[Dict[str, Any]], group_key: str, output_dir: Path) -> None:
     ensure_dir(output_dir)
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for row in rows:
-        group_value = row.get(group_key, "unknown")
-        grouped.setdefault(str(group_value), []).append(row)
-
+        grouped.setdefault(str(row.get(group_key, "unknown")), []).append(row)
     for group_value, group_rows in grouped.items():
-        filename = output_dir / f"{slugify(group_key)}_{slugify(group_value)}.csv"
-        save_csv(group_rows, filename)
+        save_csv(group_rows, output_dir / f"{slugify(group_key)}_{slugify(group_value)}.csv")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="LLM serving benchmark sweep")
-    parser.add_argument("--models", nargs="+", default=MODELS, help="Models to benchmark")
-    parser.add_argument("--prompts", nargs="+", default=PROMPTS, help="Prompts to benchmark")
-    parser.add_argument("--devices", nargs="+", default=DEVICES, help="Inference devices to test")
-    parser.add_argument("--concurrency", nargs="+", type=int, default=CONCURRENCY_LEVELS, help="Concurrency levels to test")
-    parser.add_argument("--requests", type=int, default=REQUESTS_PER_LEVEL, help="Requests per concurrency level")
+    parser = argparse.ArgumentParser(description="LLM serving benchmark sweep (Ollama native)")
+    parser.add_argument("--models", nargs="+", default=MODELS)
+    parser.add_argument("--prompts", nargs="+", default=PROMPTS)
+    parser.add_argument("--devices", nargs="+", default=DEVICES, choices=["cpu", "gpu"])
+    parser.add_argument("--concurrency", nargs="+", type=int, default=CONCURRENCY_LEVELS)
+    parser.add_argument("--requests", type=int, default=REQUESTS_PER_LEVEL)
+    parser.add_argument("--max-tokens", type=int, default=MAX_NEW_TOKENS)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    print(f"Device/model sweep (Ollama native) | GPU_HOURLY_RATE=${get_gpu_hourly_rate():.2f}/hr | "
+          f"max_tokens={args.max_tokens}")
     rows = asyncio.run(
         run_benchmark(
-            prompts=args.prompts,
-            models=args.models,
-            devices=args.devices,
-            concurrency_levels=args.concurrency,
-            requests_per_level=args.requests,
+            prompts=args.prompts, models=args.models, devices=args.devices,
+            concurrency_levels=args.concurrency, requests_per_level=args.requests,
+            max_tokens=args.max_tokens,
         )
     )
-
     save_csv(rows, CSV_PATH)
     save_grouped_csv(rows, "prompt", PROMPT_DIR)
     save_grouped_csv(rows, "device", DEVICE_DIR)

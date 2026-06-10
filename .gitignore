@@ -217,5 +217,5 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Context
-context/
+# Context (AI-agent brief at repo root only — not results/context/)
+/context/

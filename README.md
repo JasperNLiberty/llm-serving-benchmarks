@@ -22,9 +22,13 @@ python bench/backfill_cost.py            # idempotent; skips files that already 
 
 ## Key findings
 
-- **Ollama vs MLX (qwen2.5:7b):** Ollama handles concurrent requests ~3–4× more efficiently than MLX at concurrency=1, translating directly to lower cost. MLX cost grows steeply with concurrency due to its lack of batching.
-- **Model size (llama3.2:1b vs qwen2.5:7b):** The 1b model costs **$10.40/M tokens** vs **$15.70/M tokens** for the 7b — a 34% premium for 7× the parameters. Whether that quality delta justifies the cost depends on the task.
-- **Prefill vs decode (qwen2.5:7b):** For ~250-token generations, prefill is only **~5–7%** of per-request GPU cost — decode dominates. Per token, though, a **decode (output) token costs ~6× a prefill (input) token** of GPU time, because prefill ingests the whole prompt in one parallel compute-bound pass while decode emits one token per memory-bound pass. This flips for short completions over long prompts, where prefill dominates.
+**→ Full write-up with charts and methodology: [REPORT.md](REPORT.md).** Numbers below are from a single reproducible run (`python bench/run_all.py`); see [`results/MANIFEST.json`](results/MANIFEST.json) for the exact host/versions/rate.
+
+- **Context length is the most expensive variable.** At a *fixed* output length, a ~12k-token prompt costs **2.6× more per token** than a ~400-token prompt ($23.6 vs $9.1 /M). TTFT grows **~18×**, decode itself slows **2.5×** under KV-cache pressure, and the KV cache hits **650 MiB** — cost a tokens/sec chart never shows.
+- **Prefill vs decode (qwen2.5:7b):** prefill is only **~5–8%** of per-request cost for normal generations, but per token a **decode token costs ~5× a prefill token** — prefill is one parallel compute-bound pass; decode is one memory-bound pass per token. Output length is the cost lever.
+- **Ollama vs MLX (qwen2.5:7b):** Ollama is **~1.9× cheaper** ($45 vs $86 /M) under concurrent load — MLX has no continuous batching.
+- **Difficulty invariance:** per-token decode latency is flat at **~42 ms/token (±<1%)** from trivial to reasoning prompts. Cost tracks token *count*, not prompt "hardness."
+- **Model size (concurrency 1):** `llama3.2:1b` ≈ **$5.2/M** vs `qwen2.5:7b` ≈ **$11.4/M** — a ~2.2× premium for 7× the parameters. CPU vs GPU throughput is within ~3% on this unified-memory M1 (batch-1 decode is memory-bandwidth-bound).
 
 ## Charts
 
@@ -35,6 +39,8 @@ python bench/backfill_cost.py            # idempotent; skips files that already 
 | ![throughput and cost by model](charts/throughput_and_cost_vs_model_size.png) | Throughput and $/M tokens by model size, CPU vs GPU |
 | ![cost by model](charts/cost_per_million_tokens_by_model.png) | $/M tokens by model size (GPU/Metal, concurrency=1) |
 | ![prefill vs decode cost](charts/prefill_vs_decode_cost.png) | Per-request cost split into prefill vs decode dollars, by prompt category |
+| ![context ttft vs decode](charts/context_ttft_vs_decode.png) | TTFT (prefill) growth vs flat decode, as context length scales |
+| ![context kv and cost](charts/context_kvcache_and_cost.png) | KV-cache growth (analytical) and $/M tokens vs context length |
 
 Regenerate all charts from saved results:
 
@@ -52,35 +58,29 @@ pip install -r requirements.txt
 
 ## Run Benchmarks
 
-**Ollama + device sweep** (requires [mini-llm-gateway](https://github.com/noslack/mini-llm-gateway) on port 8000):
+**Run everything (recommended).** One command preflights the servers, writes a manifest, runs every benchmark, and regenerates all charts:
 
 ```sh
-python bench/load.py
+# start both gateways first (in ../mini-llm-gateway):
+BACKEND=ollama uvicorn main:app --port 8000
+BACKEND=mlx    uvicorn main:app --port 8001
+# then:
+python bench/run_all.py            # full suite
+python bench/run_all.py --dry-run  # preflight + plan only, nothing executed
 ```
 
-Sweeps models × prompts × CPU/GPU × concurrency levels. Outputs CSVs to `results/`.
+Steps whose server dependency is down are skipped (not failed). Individual benchmarks can also be run on their own:
 
-**Ollama vs MLX comparison** (gateway on port 8000, MLX server on port 8001):
+| Script | What it measures | Needs |
+|---|---|---|
+| `bench/load.py` | model × prompt × **CPU/GPU** × concurrency sweep (hits Ollama natively via `num_gpu` to control device) | Ollama (:11434) |
+| `bench/compare.py` | Ollama vs MLX throughput and cost | both gateways |
+| `bench/bench_mlx.py` | MLX batch-size sweep | MLX gateway (:8001) |
+| `bench/difficulty_invariance.py` | per-token decode latency vs prompt difficulty | Ollama gateway (:8000) |
+| `bench/context_scaling.py` | TTFT / decode / KV-cache / cost vs context length | Ollama gateway (:8000) |
+| `bench/prefill_decode_cost.py` | prefill-vs-decode dollar split (reads difficulty CSVs) | — |
 
-```sh
-python bench/compare.py
-```
-
-**MLX-only batch size sweep:**
-
-```sh
-python bench/bench_mlx.py
-```
-
-**Prefill vs decode cost decomposition** (reads the difficulty-invariance CSVs; no server needed):
-
-```sh
-python bench/prefill_decode_cost.py
-```
-
-Splits each request's GPU cost at time-to-first-token into prefill vs decode dollars, reports the per-phase per-token asymmetry, and writes `results/difficulty/prefill_decode_cost.csv` plus the chart above.
-
-All scripts respect `GPU_HOURLY_RATE` and append `cost_per_million_tokens` to every result row.
+All scripts respect `GPU_HOURLY_RATE` and write `cost_per_million_tokens` on every result row.
 
 ## Benchmarking methodology
 
