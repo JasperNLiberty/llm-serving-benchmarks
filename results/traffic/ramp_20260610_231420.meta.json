@@ -1,0 +1,13 @@
+{
+  "pattern": "ramp",
+  "duration_s": 150.0,
+  "base_rate": 0.5,
+  "peak_rate": 12.0,
+  "burst_period": 30.0,
+  "burst_len": 8.0,
+  "model": "llama3.2:1b",
+  "max_tokens": 48,
+  "gpu_hourly_rate_usd": 0.8,
+  "generated_at": "2026-06-11T06:14:20.350421+00:00",
+  "n_requests": 950
+}

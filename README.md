@@ -22,13 +22,14 @@ python bench/backfill_cost.py            # idempotent; skips files that already 
 
 ## Key findings
 
-**→ Full write-up with charts and methodology: [REPORT.md](REPORT.md).** Numbers below are from a single reproducible run (`python bench/run_all.py`); see [`results/MANIFEST.json`](results/MANIFEST.json) for the exact host/versions/rate.
+**→ Full write-ups:** [REPORT.md](REPORT.md) (benchmark suite) · [TRAFFIC.md](TRAFFIC.md) (traffic simulation & capacity planning). Numbers below are from a single reproducible run (`python bench/run_all.py`); see [`results/MANIFEST.json`](results/MANIFEST.json) for the exact host/versions/rate.
 
 - **Context length is the most expensive variable.** At a *fixed* output length, a ~12k-token prompt costs **2.6× more per token** than a ~400-token prompt ($23.6 vs $9.1 /M). TTFT grows **~18×**, decode itself slows **2.5×** under KV-cache pressure, and the KV cache hits **650 MiB** — cost a tokens/sec chart never shows.
 - **Prefill vs decode (qwen2.5:7b):** prefill is only **~5–8%** of per-request cost for normal generations, but per token a **decode token costs ~5× a prefill token** — prefill is one parallel compute-bound pass; decode is one memory-bound pass per token. Output length is the cost lever.
 - **Ollama vs MLX (qwen2.5:7b):** Ollama is **~1.9× cheaper** ($45 vs $86 /M) under concurrent load — MLX has no continuous batching.
 - **Difficulty invariance:** per-token decode latency is flat at **~42 ms/token (±<1%)** from trivial to reasoning prompts. Cost tracks token *count*, not prompt "hardness."
 - **Model size (concurrency 1):** `llama3.2:1b` ≈ **$5.2/M** vs `qwen2.5:7b` ≈ **$11.4/M** — a ~2.2× premium for 7× the parameters. CPU vs GPU throughput is within ~3% on this unified-memory M1 (batch-1 decode is memory-bandwidth-bound).
+- **Traffic & capacity ([TRAFFIC.md](TRAFFIC.md)):** under realistic time-varying load, tail latency explodes past the concurrency knee (ramp p99 **82s** vs **1.8s** at low load), and the latency-vs-cost tension is stark — steady below-capacity load has the *best* latency but the *worst* cost (**$4.08/M, 2.6× nominal**) because the idle GPU is still billed. You optimize for latency *or* utilization, not both.
 
 ## Charts
 
@@ -79,6 +80,8 @@ Steps whose server dependency is down are skipped (not failed). Individual bench
 | `bench/difficulty_invariance.py` | per-token decode latency vs prompt difficulty | Ollama gateway (:8000) |
 | `bench/context_scaling.py` | TTFT / decode / KV-cache / cost vs context length | Ollama gateway (:8000) |
 | `bench/prefill_decode_cost.py` | prefill-vs-decode dollar split (reads difficulty CSVs) | — |
+| `bench/traffic_sim.py` | open-loop traffic generator (poisson/diurnal/ramp/bursty) → per-request JSONL | Ollama gateway (:8000) |
+| `bench/analyze_traffic.py` | recover load pattern, latency-vs-load, queueing knee, effective $/token, Little's Law | — |
 
 All scripts respect `GPU_HOURLY_RATE` and write `cost_per_million_tokens` on every result row.
 

@@ -1,0 +1,13 @@
+{
+  "pattern": "poisson",
+  "duration_s": 120.0,
+  "base_rate": 2.0,
+  "peak_rate": 4.0,
+  "burst_period": 30.0,
+  "burst_len": 8.0,
+  "model": "llama3.2:1b",
+  "max_tokens": 48,
+  "gpu_hourly_rate_usd": 0.8,
+  "generated_at": "2026-06-11T06:07:22.115248+00:00",
+  "n_requests": 247
+}
