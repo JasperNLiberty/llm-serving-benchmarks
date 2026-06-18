@@ -1,16 +1,17 @@
 {
-  "generated_at": "2026-06-10T05:24:54.093201+00:00",
+  "generated_at": "2026-06-18T04:08:57.110681+00:00",
   "host": "Lis-MacBook-Pro.local",
   "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
   "processor": "arm",
   "python": "3.14.5",
-  "ollama_version": "0.24.0",
+  "ollama_version": "0.30.7",
   "gpu_hourly_rate_usd": 0.8,
   "quick_mode": false,
   "services_up": {
     "ollama_gateway": true,
-    "mlx_gateway": true,
-    "ollama_daemon": true
+    "mlx_gateway": false,
+    "ollama_daemon": true,
+    "reasoning_model": false
   },
   "ollama_models": [
     {

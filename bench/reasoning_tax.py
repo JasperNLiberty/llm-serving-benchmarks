@@ -372,7 +372,8 @@ def make_charts(rows: List[Dict[str, Any]], reasoning_model: str, baseline_model
     ax.bar(tiers, an, bottom=[p_ + t_ for p_, t_ in zip(pf, th)], label="answer", color="#FFB74D")
     ax.set_ylabel("$ per request (×10⁻³)")
     ax.set_title(f"Where the dollars go — {reasoning_model}\n"
-                 "(thinking phase dominates and grows with difficulty)", fontsize=11)
+                 "(prefill negligible; thinking + a verbose worked answer both grow with difficulty)",
+                 fontsize=10)
     ax.tick_params(axis="x", rotation=15)
     ax.legend(); ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()

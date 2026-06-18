@@ -22,12 +22,13 @@ python bench/backfill_cost.py            # idempotent; skips files that already 
 
 ## Key findings
 
-**→ Full write-ups:** [REPORT.md](REPORT.md) (benchmark suite) · [TRAFFIC.md](TRAFFIC.md) (traffic simulation & capacity planning). Numbers below are from a single reproducible run (`python bench/run_all.py`); see [`results/MANIFEST.json`](results/MANIFEST.json) for the exact host/versions/rate.
+**→ Full write-ups:** [REPORT.md](REPORT.md) (benchmark suite) · [TRAFFIC.md](TRAFFIC.md) (traffic simulation & capacity planning) · [REASONING.md](REASONING.md) (the reasoning tax: thinking models vs non-reasoning). Numbers below are from a single reproducible run (`python bench/run_all.py`); see [`results/MANIFEST.json`](results/MANIFEST.json) for the exact host/versions/rate.
 
 - **Context length is the most expensive variable.** At a *fixed* output length, a ~12k-token prompt costs **2.6× more per token** than a ~400-token prompt ($23.6 vs $9.1 /M). TTFT grows **~18×**, decode itself slows **2.5×** under KV-cache pressure, and the KV cache hits **650 MiB** — cost a tokens/sec chart never shows.
 - **Prefill vs decode (qwen2.5:7b):** prefill is only **~5–8%** of per-request cost for normal generations, but per token a **decode token costs ~5× a prefill token** — prefill is one parallel compute-bound pass; decode is one memory-bound pass per token. Output length is the cost lever.
 - **Ollama vs MLX (qwen2.5:7b):** Ollama is **~1.9× cheaper** ($45 vs $86 /M) under concurrent load — MLX has no continuous batching.
 - **Difficulty invariance:** per-token decode latency is flat at **~42 ms/token (±<1%)** from trivial to reasoning prompts. Cost tracks token *count*, not prompt "hardness."
+- **The reasoning tax ([REASONING.md](REASONING.md)):** a reasoning model (`deepseek-r1:7b`) *breaks* difficulty invariance — per-token rate stays flat (~42 tok/s), but hidden thinking tokens climb with difficulty (41→110), so cost runs **4–8.5× the non-reasoning baseline** and the premium grows with difficulty. It's pure waste where both models are right (t1–t4, 100% each) — until the hardest tier, where the baseline is **wrong every time** and reasoning is right: baseline cost *per correct answer* goes to **∞**. The case for reasoning models is a routing decision, not a default.
 - **Model size (concurrency 1):** `llama3.2:1b` ≈ **$5.2/M** vs `qwen2.5:7b` ≈ **$11.4/M** — a ~2.2× premium for 7× the parameters. CPU vs GPU throughput is within ~3% on this unified-memory M1 (batch-1 decode is memory-bandwidth-bound).
 - **Traffic & capacity ([TRAFFIC.md](TRAFFIC.md)):** under realistic time-varying load, tail latency explodes past the concurrency knee (ramp p99 **82s** vs **1.8s** at low load), and the latency-vs-cost tension is stark — steady below-capacity load has the *best* latency but the *worst* cost (**$4.08/M, 2.6× nominal**) because the idle GPU is still billed. You optimize for latency *or* utilization, not both.
 
@@ -42,6 +43,9 @@ python bench/backfill_cost.py            # idempotent; skips files that already 
 | ![prefill vs decode cost](charts/prefill_vs_decode_cost.png) | Per-request cost split into prefill vs decode dollars, by prompt category |
 | ![context ttft vs decode](charts/context_ttft_vs_decode.png) | TTFT (prefill) growth vs flat decode, as context length scales |
 | ![context kv and cost](charts/context_kvcache_and_cost.png) | KV-cache growth (analytical) and $/M tokens vs context length |
+| ![reasoning tokens vs difficulty](charts/reasoning_tokens_vs_difficulty.png) | Thinking-token count vs difficulty (reasoning) vs flat baseline output |
+| ![reasoning tax](charts/reasoning_tax_cost.png) | $/request reasoning vs baseline, with the tax (4–8.5×) per tier |
+| ![reasoning latency decomposition](charts/reasoning_latency_decomposition.png) | Prefill / thinking / answer dollar split per difficulty tier |
 
 Regenerate all charts from saved results:
 

@@ -1,0 +1,13 @@
+{
+  "pattern": "diurnal",
+  "duration_s": 180.0,
+  "base_rate": 0.5,
+  "peak_rate": 4.0,
+  "burst_period": 30.0,
+  "burst_len": 8.0,
+  "model": "llama3.2:1b",
+  "max_tokens": 48,
+  "gpu_hourly_rate_usd": 0.8,
+  "generated_at": "2026-06-17T06:06:45.724246+00:00",
+  "n_requests": 382
+}
