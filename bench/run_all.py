@@ -39,6 +39,10 @@ OLLAMA_GATEWAY = "http://127.0.0.1:8000"
 MLX_GATEWAY = "http://127.0.0.1:8001"
 OLLAMA_API = "http://127.0.0.1:11434"
 
+# Reasoning model for the reasoning-tax step; the step is skipped (not failed)
+# if it isn't pulled. A reasoning fine-tune of the qwen2.5-7B baseline base.
+REASONING_MODEL = "deepseek-r1:7b"
+
 PYTHON = sys.executable
 
 
@@ -54,13 +58,18 @@ def service_up(url: str, path: str = "/healthz", timeout: float = 2.0) -> bool:
 
 def preflight() -> Dict[str, bool]:
     print("Preflight:")
+    model_names = [m["name"] for m in ollama_models()]
     services = {
         "ollama_gateway": service_up(OLLAMA_GATEWAY),
         "mlx_gateway": service_up(MLX_GATEWAY),
         "ollama_daemon": service_up(OLLAMA_API, path="/api/tags"),
+        "reasoning_model": REASONING_MODEL in model_names,
     }
     for name, up in services.items():
         print(f"  {'OK  ' if up else 'DOWN'}  {name}")
+    if not services["reasoning_model"]:
+        print(f"\n  (optional) Pull the reasoning model for the reasoning-tax step:")
+        print(f"    ollama pull {REASONING_MODEL}")
     if not services["ollama_gateway"]:
         print("\n  Start the Ollama gateway:")
         print("    cd ../mini-llm-gateway && BACKEND=ollama uvicorn main:app --port 8000")
@@ -133,6 +142,9 @@ def build_steps(quick: bool) -> List[Dict]:
             {"name": "difficulty invariance", "requires": ["ollama_gateway"],
              "cmd": b("difficulty_invariance.py", "--repeats", "1",
                       "--max-tokens", "64", "--no-charts")},
+            {"name": "reasoning tax", "requires": ["ollama_daemon", "reasoning_model"],
+             "cmd": b("reasoning_tax.py", "--repeats", "1",
+                      "--max-tokens", "512", "--no-charts")},
             {"name": "context scaling", "requires": ["ollama_gateway"],
              "cmd": b("context_scaling.py", "--lengths", "256", "1024",
                       "--repeats", "1", "--max-tokens", "32", "--no-charts")},
@@ -151,6 +163,8 @@ def build_steps(quick: bool) -> List[Dict]:
          "cmd": b("bench_mlx.py")},
         {"name": "difficulty invariance", "requires": ["ollama_gateway"],
          "cmd": b("difficulty_invariance.py")},
+        {"name": "reasoning tax", "requires": ["ollama_daemon", "reasoning_model"],
+         "cmd": b("reasoning_tax.py")},
         {"name": "context scaling", "requires": ["ollama_gateway"],
          "cmd": b("context_scaling.py")},
         {"name": "prefill/decode cost", "requires": [],

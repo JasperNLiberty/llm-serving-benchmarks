@@ -78,6 +78,7 @@ Steps whose server dependency is down are skipped (not failed). Individual bench
 | `bench/compare.py` | Ollama vs MLX throughput and cost | both gateways |
 | `bench/bench_mlx.py` | MLX batch-size sweep | MLX gateway (:8001) |
 | `bench/difficulty_invariance.py` | per-token decode latency vs prompt difficulty | Ollama gateway (:8000) |
+| `bench/reasoning_tax.py` | reasoning vs non-reasoning: thinking-tokens, latency split, $/correct-answer, the reasoning tax vs difficulty | Ollama daemon + `deepseek-r1:7b` |
 | `bench/context_scaling.py` | TTFT / decode / KV-cache / cost vs context length | Ollama gateway (:8000) |
 | `bench/prefill_decode_cost.py` | prefill-vs-decode dollar split (reads difficulty CSVs) | — |
 | `bench/traffic_sim.py` | open-loop traffic generator (poisson/diurnal/ramp/bursty) → per-request JSONL | Ollama gateway (:8000) |
