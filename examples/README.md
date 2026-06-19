@@ -55,10 +55,13 @@ NN-short-name/
 
 ## Index
 
-| # | Experiment | Variable | Status |
+| # | Experiment | Variable | Decision it informs |
 |---|---|---|---|
-| 01 | [reasoning-vs-non-reasoning](01-reasoning-vs-non-reasoning/) | reasoning model vs not | ✅ |
-| 02 | traffic-patterns | arrival shape (steady/bursty/diurnal/ramp) | planned |
-| 03 | model-size | 1B vs 7B params | planned |
+| 01 | [reasoning-vs-non-reasoning](01-reasoning-vs-non-reasoning/) | reasoning model vs not | route to reasoning, don't default to it |
+| 02 | [traffic-and-capacity](02-traffic-and-capacity/) | load vs fixed capacity | autoscale to the demand curve |
+| 03 | [model-size](03-model-size/) | 1B vs 7B params | right-size per task |
+| 04 | [context-length](04-context-length/) | prompt size (~400 → ~12k tok) | trim retrieval; context is a budget |
+
+Each varies **one** property and holds the rest constant. Together they cover the dimensions a real serving team actually decides on: model capability, capacity/utilization, model size, and context budget.
 
 See [`_TEMPLATE/`](_TEMPLATE/) to start a new one.
