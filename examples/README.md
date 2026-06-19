@@ -61,7 +61,9 @@ NN-short-name/
 | 02 | [traffic-and-capacity](02-traffic-and-capacity/) | load vs fixed capacity | autoscale to the demand curve |
 | 03 | [model-size](03-model-size/) | 1B vs 7B params | right-size per task |
 | 04 | [context-length](04-context-length/) | prompt size (~400 → ~12k tok) | trim retrieval; context is a budget |
+| 05 | [quantization](05-quantization/) | precision (Q4 vs Q8) | quantize for memory, not speed |
+| 06 | [self-hosted-vs-api](06-self-hosted-vs-api/) | build vs buy | stay on API until ~64M tok/day steady |
 
-Each varies **one** property and holds the rest constant. Together they cover the dimensions a real serving team actually decides on: model capability, capacity/utilization, model size, and context budget.
+Each varies **one** property and holds the rest constant. Together they cover the dimensions a real serving team actually decides on: model **capability** (01), **capacity/utilization** (02), model **size** (03), **context budget** (04), **precision** (05), and **procurement** (06).
 
 See [`_TEMPLATE/`](_TEMPLATE/) to start a new one.

@@ -1,0 +1,16 @@
+[
+  {
+    "model": "qwen2.5:7b",
+    "tok_per_sec": 41.84553307080682,
+    "cost_per_million_tokens": 5.310536296579135,
+    "accuracy": 0.75,
+    "size_gb": 4.7
+  },
+  {
+    "model": "qwen2.5:7b-instruct-q8_0",
+    "tok_per_sec": 39.45976987272732,
+    "cost_per_million_tokens": 5.631614754444158,
+    "accuracy": 0.75,
+    "size_gb": 8.1
+  }
+]
